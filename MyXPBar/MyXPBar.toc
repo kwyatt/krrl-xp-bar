@@ -1,9 +1,0 @@
-## Interface: 110002
-## Title: MyXPBar
-## Notes: Standalone port of "Shirati's Experience Bar" WeakAura - tracks XP/hour, time to level, quest & rested XP.
-## Author: You
-## Version: 1.0.0
-## SavedVariables: MyXPBarDB
-## SavedVariablesPerCharacter: MyXPBarCharDB
-
-MyXPBar.lua

@@ -1,4 +1,4 @@
-ADDON   := MyXPBar
+ADDON   := KrrlXPBar
 VERSION := $(shell sed -n 's/^## Version: *//p' $(ADDON)/$(ADDON).toc | head -1)
 GITREF  := $(shell git rev-parse --short HEAD)
 DIST    := dist

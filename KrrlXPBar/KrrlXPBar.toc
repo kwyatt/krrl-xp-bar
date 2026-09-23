@@ -1,0 +1,9 @@
+## Interface: 110002
+## Title: Krrl XP Bar
+## Notes: Standalone XP tracker - tracks XP/hour, time to level, quest & rested XP.
+## Author: You
+## Version: 1.0.0
+## SavedVariables: KrrlXPBarDB
+## SavedVariablesPerCharacter: KrrlXPBarCharDB
+
+KrrlXPBar.lua

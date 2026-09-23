@@ -1,6 +1,6 @@
 --[[
-    MyXPBar
-    A standalone WoW addon port of the WeakAura "Shirati's Experience Bar"
+    Krrl XP Bar
+    A standalone WoW addon port of an Experience Bar WeakAura
     (wago.io/rM_UFyew4, by Luxthos & Daemoos).
 
     All of the XP/hour, time-to-level, quest-XP and rested-XP math below is
@@ -65,12 +65,12 @@ local env = {
 }
 
 local function GetConfig()
-    return MyXPBarDB.config
+    return KrrlXPBarDB.config
 end
 
 local function GetSavedVars()
-    MyXPBarCharDB.session = MyXPBarCharDB.session or {}
-    local S = MyXPBarCharDB.session
+    KrrlXPBarCharDB.session = KrrlXPBarCharDB.session or {}
+    local S = KrrlXPBarCharDB.session
     S.gainedXP               = S.gainedXP or 0
     S.lastXP                 = S.lastXP or UnitXP("player")
     S.maxXP                  = S.maxXP or UnitXPMax("player")
@@ -148,12 +148,12 @@ local function ScanXPRateBuffInner()
         local name = GetBuffNameByIndex("player", i)
         if not name then break end
         if name == locName then
-            local tooltip = CreateFrame("GameTooltip", "MyXPBarHiddenTooltip", nil, "GameTooltipTemplate")
+            local tooltip = CreateFrame("GameTooltip", "KrrlXPBarHiddenTooltip", nil, "GameTooltipTemplate")
             tooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
             if type(tooltip.SetUnitBuff) == "function" then
                 pcall(tooltip.SetUnitBuff, tooltip, "player", i)
             end
-            local description = _G["MyXPBarHiddenTooltipTextLeft2"] and _G["MyXPBarHiddenTooltipTextLeft2"]:GetText()
+            local description = _G["KrrlXPBarHiddenTooltipTextLeft2"] and _G["KrrlXPBarHiddenTooltipTextLeft2"]:GetText()
             if description then
                 local expGain = description:match("Experience gains increased by (%d+)%%")
                 if expGain then
@@ -389,7 +389,7 @@ end
 
 local BAR_WIDTH, BAR_HEIGHT = 600, 30
 
-local frame = CreateFrame("StatusBar", "MyXPBarFrame", UIParent, "BackdropTemplate")
+local frame = CreateFrame("StatusBar", "KrrlXPBarFrame", UIParent, "BackdropTemplate")
 frame:SetSize(BAR_WIDTH, BAR_HEIGHT)
 frame:SetPoint("TOP", UIParent, "TOP", 0, -4)
 frame:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
@@ -413,7 +413,7 @@ frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
 frame:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
     local point, _, relPoint, x, y = self:GetPoint()
-    MyXPBarDB.point = { point, relPoint, x, y }
+    KrrlXPBarDB.point = { point, relPoint, x, y }
 end)
 
 local restedTex = frame:CreateTexture(nil, "ARTWORK")
@@ -443,7 +443,7 @@ local lastTexts -- cache of the last BuildCustomTexts() result, for the tooltip
 local function ShowTooltip()
     if not lastTexts then return end
     GameTooltip:SetOwner(frame, "ANCHOR_BOTTOM")
-    GameTooltip:AddLine("MyXPBar", 1, 1, 1)
+    GameTooltip:AddLine("Krrl XP Bar", 1, 1, 1)
     for _, key in ipairs({ "c5", "c6", "c7" }) do
         local line = lastTexts[key]
         if line and line ~= "" then
@@ -542,14 +542,14 @@ end
 local function OnEventInner(self, event, arg1, arg2, arg3, arg4)
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON_NAME then return end
-        MyXPBarDB = MyXPBarDB or {}
-        MyXPBarDB.config = MyXPBarDB.config or {}
-        CopyDefaults(MyXPBarDB.config, CONFIG_DEFAULTS)
-        MyXPBarCharDB = MyXPBarCharDB or {}
+        KrrlXPBarDB = KrrlXPBarDB or {}
+        KrrlXPBarDB.config = KrrlXPBarDB.config or {}
+        CopyDefaults(KrrlXPBarDB.config, CONFIG_DEFAULTS)
+        KrrlXPBarCharDB = KrrlXPBarCharDB or {}
         GetSavedVars()
-        if MyXPBarDB.point then
+        if KrrlXPBarDB.point then
             frame:ClearAllPoints()
-            frame:SetPoint(MyXPBarDB.point[1], UIParent, MyXPBarDB.point[2], MyXPBarDB.point[3], MyXPBarDB.point[4])
+            frame:SetPoint(KrrlXPBarDB.point[1], UIParent, KrrlXPBarDB.point[2], KrrlXPBarDB.point[3], KrrlXPBarDB.point[4])
         end
         ScanXPRateBuff()
         ScanHeirloomBonus()
@@ -630,12 +630,12 @@ end
 -- relying on the client's built-in CPU profiler, which isn't reliable on
 -- WoW Forever's beta client.
 local function OnEvent(self, event, ...)
-    if MyXPBarDB and MyXPBarDB.config and MyXPBarDB.config["debug-profile"] then
+    if KrrlXPBarDB and KrrlXPBarDB.config and KrrlXPBarDB.config["debug-profile"] then
         local t0 = debugprofilestop()
         OnEventInner(self, event, ...)
         local dt = debugprofilestop() - t0
         if dt > DEBUG_PROFILE_THRESHOLD_MS then
-            print(("|cffff5555MyXPBar debug|r: %s took %.2fms"):format(event, dt))
+            print(("|cffff5555Krrl XP Bar debug|r: %s took %.2fms"):format(event, dt))
         end
     else
         OnEventInner(self, event, ...)
@@ -646,7 +646,7 @@ eventFrame:SetScript("OnEvent", OnEvent)
 
 -- Recompute XP/hour, time-to-level, and session-time text once per second.
 C_Timer.NewTicker(1, function()
-    if MyXPBarDB then
+    if KrrlXPBarDB then
         UpdateDisplay()
     end
 end)
@@ -655,19 +655,19 @@ end)
 -- Slash commands
 --------------------------------------------------------------------------
 
-SLASH_MYXPBAR1 = "/mxp"
-SlashCmdList["MYXPBAR"] = function(msg)
+SLASH_KRRLXPBAR1 = "/kxp"
+SlashCmdList["KRRLXPBAR"] = function(msg)
     msg = (msg or ""):lower():trim()
 
     if CONFIG_DEFAULTS[msg] ~= nil then
         local cfg = GetConfig()
         cfg[msg] = not cfg[msg]
         UpdateDisplay()
-        print(("|cff33ff99MyXPBar|r: %s is now %s."):format(msg, tostring(cfg[msg])))
+        print(("|cff33ff99Krrl XP Bar|r: %s is now %s."):format(msg, tostring(cfg[msg])))
     else
-        print("|cff33ff99MyXPBar|r commands:")
+        print("|cff33ff99Krrl XP Bar|r commands:")
         print("  Click and drag the bar to move it.")
-        print("  /mxp <option>  - toggle: leveltime-text, sessiontime-text,")
+        print("  /kxp <option>  - toggle: leveltime-text, sessiontime-text,")
         print("                   showxphour-text, questrested-text,")
         print("                   showincompletequest-bar, showmaxlevel,")
         print("                   reset_reload, hide_xpbar, debug-profile")
