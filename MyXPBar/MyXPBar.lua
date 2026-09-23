@@ -481,9 +481,12 @@ local function UpdateDisplay()
     local total = s.totalXP > 0 and s.totalXP or 1
     local function widthFor(xp) return width * math.min(xp / total, 1) end
 
+    -- Starts where the current-XP fill ends, so it shows how far turning in
+    -- ready-to-turn-in quests would push you (currentXP + completeXP), not
+    -- completeXP measured from zero.
     completeTex:ClearAllPoints()
-    completeTex:SetPoint("TOPLEFT", frame, "TOPLEFT")
-    completeTex:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT")
+    completeTex:SetPoint("TOPLEFT", frame, "TOPLEFT", widthFor(s.currentXP), 0)
+    completeTex:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", widthFor(s.currentXP), 0)
     completeTex:SetWidth(math.max(widthFor(s.completeXP), 0.01))
 
     local incompleteWidth = cfg["showincompletequest-bar"] and s.incompleteXP or 0
