@@ -482,15 +482,18 @@ local function UpdateDisplay()
     local function widthFor(xp) return width * math.min(xp / total, 1) end
 
     completeTex:ClearAllPoints()
+    completeTex:SetPoint("TOPLEFT", frame, "TOPLEFT")
     completeTex:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT")
     completeTex:SetWidth(math.max(widthFor(s.completeXP), 0.01))
 
     local incompleteWidth = cfg["showincompletequest-bar"] and s.incompleteXP or 0
     incompleteTex:ClearAllPoints()
+    incompleteTex:SetPoint("TOPLEFT", completeTex, "TOPRIGHT")
     incompleteTex:SetPoint("BOTTOMLEFT", completeTex, "BOTTOMRIGHT")
     incompleteTex:SetWidth(math.max(widthFor(incompleteWidth), 0.01))
 
     restedTex:ClearAllPoints()
+    restedTex:SetPoint("TOPLEFT", incompleteTex, "TOPRIGHT")
     restedTex:SetPoint("BOTTOMLEFT", incompleteTex, "BOTTOMRIGHT")
     restedTex:SetWidth(math.max(widthFor(s.restedXP), 0.01))
 
