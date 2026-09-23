@@ -35,7 +35,11 @@ local CONFIG_DEFAULTS = {
     ["showmaxlevel"]          = false,
     ["reset_reload"]          = false,
     ["hide_xpbar"]            = false,
+    ["debug-profile"]         = false,
 }
+
+-- Anything slower than this prints a warning when debug-profile is on.
+local DEBUG_PROFILE_THRESHOLD_MS = 2
 
 local function CopyDefaults(dst, src)
     for k, v in pairs(src) do
@@ -535,7 +539,7 @@ for _, e in ipairs(watchedEvents) do
     eventFrame:RegisterEvent(e)
 end
 
-local function OnEvent(self, event, arg1, arg2, arg3, arg4)
+local function OnEventInner(self, event, arg1, arg2, arg3, arg4)
     if event == "ADDON_LOADED" then
         if arg1 ~= ADDON_NAME then return end
         MyXPBarDB = MyXPBarDB or {}
@@ -620,6 +624,24 @@ local function OnEvent(self, event, arg1, arg2, arg3, arg4)
     UpdateDisplay()
 end
 
+-- Self-timing wrapper: prints how long each event took to handle when
+-- debug-profile is on, so hitches can be traced to a specific event
+-- (e.g. QUEST_LOG_UPDATE firing repeatedly on quest-item loot) without
+-- relying on the client's built-in CPU profiler, which isn't reliable on
+-- WoW Forever's beta client.
+local function OnEvent(self, event, ...)
+    if MyXPBarDB and MyXPBarDB.config and MyXPBarDB.config["debug-profile"] then
+        local t0 = debugprofilestop()
+        OnEventInner(self, event, ...)
+        local dt = debugprofilestop() - t0
+        if dt > DEBUG_PROFILE_THRESHOLD_MS then
+            print(("|cffff5555MyXPBar debug|r: %s took %.2fms"):format(event, dt))
+        end
+    else
+        OnEventInner(self, event, ...)
+    end
+end
+
 eventFrame:SetScript("OnEvent", OnEvent)
 
 -- Recompute XP/hour, time-to-level, and session-time text once per second.
@@ -648,6 +670,6 @@ SlashCmdList["MYXPBAR"] = function(msg)
         print("  /mxp <option>  - toggle: leveltime-text, sessiontime-text,")
         print("                   showxphour-text, questrested-text,")
         print("                   showincompletequest-bar, showmaxlevel,")
-        print("                   reset_reload, hide_xpbar")
+        print("                   reset_reload, hide_xpbar, debug-profile")
     end
 end
