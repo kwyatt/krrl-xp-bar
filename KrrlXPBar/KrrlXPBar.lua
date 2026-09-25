@@ -16,8 +16,9 @@
       - The pause/reset-session feature from the original aura has been
         removed by request; session time/XP-per-hour just tracks
         continuously from login (or reload, if configured).
-      - There is no in-game options panel; toggles are set via slash
-        command and saved per-character.
+      - Most toggles are slash-command only. Font typeface/size and bar
+        texture have a small in-game options panel (right-click the bar,
+        or /kxp options).
 ]]
 
 local ADDON_NAME = ...
@@ -36,7 +37,29 @@ local CONFIG_DEFAULTS = {
     ["reset_reload"]          = false,
     ["hide_xpbar"]            = false,
     ["debug-profile"]         = false,
+    ["fontPath"]              = "Fonts\\FRIZQT__.TTF",
+    ["fontSize"]              = 12,
+    ["barTexture"]            = "Interface\\TargetingFrame\\UI-StatusBar",
 }
+
+-- Typefaces and bar textures bundled with the WoW client, so these work on
+-- any server/expansion without shipping asset files ourselves. The options
+-- panel adds whatever other addons registered with LibSharedMedia.
+local FONT_OPTIONS = {
+    { name = "Friz Quadrata", path = "Fonts\\FRIZQT__.TTF" },
+    { name = "Arial Narrow",  path = "Fonts\\ARIALN.TTF" },
+    { name = "Skurri",        path = "Fonts\\SKURRI.TTF" },
+    { name = "Morpheus",      path = "Fonts\\MORPHEUS.TTF" },
+}
+
+local TEXTURE_OPTIONS = {
+    { name = "Blizzard", path = "Interface\\TargetingFrame\\UI-StatusBar" },
+    { name = "Flat",     path = "Interface\\Buttons\\WHITE8x8" },
+    { name = "Raid",     path = "Interface\\RaidFrame\\Raid-Bar-Hp-Fill" },
+    { name = "Skills",   path = "Interface\\PaperDollInfoFrame\\UI-Character-Skills-Bar" },
+}
+
+local FONT_SIZE_MIN, FONT_SIZE_MAX = 8, 24
 
 -- Anything slower than this prints a warning when debug-profile is on.
 local DEBUG_PROFILE_THRESHOLD_MS = 2
@@ -392,7 +415,7 @@ local BAR_WIDTH, BAR_HEIGHT = 600, 30
 local frame = CreateFrame("StatusBar", "KrrlXPBarFrame", UIParent, "BackdropTemplate")
 frame:SetSize(BAR_WIDTH, BAR_HEIGHT)
 frame:SetPoint("TOP", UIParent, "TOP", 0, -4)
-frame:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+frame:SetStatusBarTexture(CONFIG_DEFAULTS.barTexture)
 frame:SetStatusBarColor(0.34, 0.39, 1, 1)
 frame:SetMinMaxValues(0, 1)
 frame:SetValue(0)
@@ -417,17 +440,17 @@ frame:SetScript("OnDragStop", function(self)
 end)
 
 local restedTex = frame:CreateTexture(nil, "ARTWORK")
-restedTex:SetColorTexture(0.31, 0.56, 1, 0.55)
+restedTex.color = { 0.31, 0.56, 1, 0.55 }
 restedTex:SetPoint("TOP", frame, "TOP")
 restedTex:SetPoint("BOTTOM", frame, "BOTTOM")
 
 local completeTex = frame:CreateTexture(nil, "ARTWORK")
-completeTex:SetColorTexture(1, 0.59, 0, 0.9)
+completeTex.color = { 1, 0.59, 0, 0.9 }
 completeTex:SetPoint("TOP", frame, "TOP")
 completeTex:SetPoint("BOTTOM", frame, "BOTTOM")
 
 local incompleteTex = frame:CreateTexture(nil, "ARTWORK")
-incompleteTex:SetColorTexture(1, 0.82, 0.31, 0.6)
+incompleteTex.color = { 1, 0.82, 0.31, 0.6 }
 incompleteTex:SetPoint("TOP", frame, "TOP")
 incompleteTex:SetPoint("BOTTOM", frame, "BOTTOM")
 
@@ -437,6 +460,368 @@ mainText:SetPoint("CENTER", frame, "CENTER", 0, 0)
 -- Always-visible XP/hour + time-to-level line, anchored just below the bar.
 local xpHourText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 xpHourText:SetPoint("TOP", frame, "BOTTOM", 0, -2)
+
+--------------------------------------------------------------------------
+-- Appearance (font typeface / size, bar texture)
+--------------------------------------------------------------------------
+
+-- LibSharedMedia is optional and never bundled: when another addon has
+-- loaded it (EllesmereUI, SharedMedia packs, ...), its registered fonts and
+-- bar textures are offered alongside the built-ins.
+local function GetLSM()
+    return LibStub and LibStub("LibSharedMedia-3.0", true)
+end
+
+local function NormalizePath(path)
+    return (tostring(path):lower():gsub("/", "\\"))
+end
+
+-- Built-ins plus LSM media of lsmType, deduped by file path and sorted by
+-- name. Rebuilt on every call so media registered late still shows up.
+local function GetMediaOptions(builtins, lsmType)
+    local list, seen = {}, {}
+    local function add(name, path)
+        local key = NormalizePath(path)
+        if not seen[key] then
+            seen[key] = true
+            list[#list + 1] = { name = name, path = path }
+        end
+    end
+
+    for _, opt in ipairs(builtins) do
+        add(opt.name, opt.path)
+    end
+    local LSM = GetLSM()
+    if LSM then
+        for name, path in pairs(LSM:HashTable(lsmType) or {}) do
+            if type(path) == "string" then add(name, path) end
+        end
+    end
+
+    table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
+    return list
+end
+
+local function FontOptions() return GetMediaOptions(FONT_OPTIONS, "font") end
+local function TextureOptions() return GetMediaOptions(TEXTURE_OPTIONS, "statusbar") end
+
+-- Settings store the file path, not the LSM name, so they keep working when
+-- LSM or the addon that registered the media isn't loaded. Falls back to
+-- the file name when no list entry matches.
+local function MediaName(list, path)
+    local key = NormalizePath(path)
+    for _, opt in ipairs(list) do
+        if NormalizePath(opt.path) == key then return opt.name end
+    end
+    return tostring(path):match("([^\\/]+)$") or tostring(path)
+end
+
+-- Newer clients return false when the font file can't be loaded; older ones
+-- return nothing, which is treated as success.
+local function SetFontSafe(fontString, path, size, flags)
+    if fontString:SetFont(path, size, flags or "") == false then
+        fontString:SetFont(CONFIG_DEFAULTS.fontPath, size, flags or "")
+    end
+end
+
+local function ApplyFont()
+    local cfg = GetConfig()
+    local path = cfg.fontPath or CONFIG_DEFAULTS.fontPath
+    local size = cfg.fontSize or CONFIG_DEFAULTS.fontSize
+
+    local _, _, mainFlags = mainText:GetFont()
+    SetFontSafe(mainText, path, size, mainFlags)
+
+    local _, _, hourFlags = xpHourText:GetFont()
+    SetFontSafe(xpHourText, path, max(FONT_SIZE_MIN, size - 2), hourFlags)
+end
+
+-- The overlays use the same texture as the fill, tinted with their own
+-- color, so a texture change restyles the whole bar consistently.
+local function ApplyBarTexture()
+    local path = GetConfig().barTexture or CONFIG_DEFAULTS.barTexture
+    frame:SetStatusBarTexture(path)
+    frame:SetStatusBarColor(0.34, 0.39, 1, 1)
+    for _, overlay in ipairs({ restedTex, completeTex, incompleteTex }) do
+        overlay:SetTexture(path)
+        overlay:SetVertexColor(unpack(overlay.color))
+    end
+end
+
+--------------------------------------------------------------------------
+-- Options panel
+--
+-- Built from plain frames and UIPanelButtonTemplate buttons instead of
+-- UIDropDownMenu/OptionsSliderTemplate/scroll-frame templates, which newer
+-- clients have deprecated and the WoW Forever beta client may not ship.
+--------------------------------------------------------------------------
+
+local optionsFrame
+local RefreshOptionsFrame
+
+-- Media picker: a fixed set of rows over a scroll offset (mouse wheel or
+-- the arrow buttons). Font rows are drawn in their own typeface; texture
+-- rows show a swatch of the texture in the bar color.
+local PICKER_ROWS, PICKER_ROW_HEIGHT = 12, 20
+local picker
+
+local function RefreshPicker()
+    local list = picker.list
+    local maxOffset = max(0, #list - PICKER_ROWS)
+    picker.offset = min(max(picker.offset, 0), maxOffset)
+    local current = NormalizePath(GetConfig()[picker.key] or "")
+
+    for i, row in ipairs(picker.rows) do
+        local opt = list[picker.offset + i]
+        if opt then
+            row.opt = opt
+            if picker.kind == "font" then
+                SetFontSafe(row.text, opt.path, 13)
+                row.preview:Hide()
+            else
+                row.text:SetFontObject(GameFontHighlightSmall)
+                row.preview:SetTexture(opt.path)
+                row.preview:Show()
+            end
+            row.text:SetText(opt.name)
+            if NormalizePath(opt.path) == current then
+                row.text:SetTextColor(1, 0.82, 0)
+            else
+                row.text:SetTextColor(1, 1, 1)
+            end
+            row:Show()
+        else
+            row:Hide()
+        end
+    end
+
+    picker.upBtn:SetEnabled(picker.offset > 0)
+    picker.downBtn:SetEnabled(picker.offset < maxOffset)
+    picker.countText:SetText(#list > PICKER_ROWS
+        and ("%d-%d of %d"):format(picker.offset + 1, picker.offset + PICKER_ROWS, #list)
+        or "")
+end
+
+local function ScrollPicker(delta)
+    picker.offset = picker.offset + delta
+    RefreshPicker()
+end
+
+local function GetPicker()
+    if picker then return picker end
+
+    -- Parented to the options panel so it hides (and closes on Escape) with it.
+    picker = CreateFrame("Frame", nil, optionsFrame, "BackdropTemplate")
+    picker:SetSize(250, PICKER_ROWS * PICKER_ROW_HEIGHT + 34)
+    picker:SetFrameStrata("FULLSCREEN_DIALOG")
+    picker:SetBackdrop({
+        bgFile = "Interface\\Buttons\\WHITE8x8",
+        edgeFile = "Interface\\Buttons\\WHITE8x8",
+        edgeSize = 1,
+    })
+    picker:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+    picker:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    picker:EnableMouse(true)
+    picker:EnableMouseWheel(true)
+    picker:SetScript("OnMouseWheel", function(_, delta) ScrollPicker(-delta * 3) end)
+    picker:Hide()
+    picker.offset = 0
+
+    picker.rows = {}
+    for i = 1, PICKER_ROWS do
+        local row = CreateFrame("Button", nil, picker)
+        row:SetSize(206, PICKER_ROW_HEIGHT)
+        row:SetPoint("TOPLEFT", 8, -8 - (i - 1) * PICKER_ROW_HEIGHT)
+
+        row.preview = row:CreateTexture(nil, "BACKGROUND")
+        row.preview:SetPoint("TOPLEFT", 0, -2)
+        row.preview:SetPoint("BOTTOMRIGHT", 0, 2)
+        row.preview:SetVertexColor(0.34, 0.39, 1, 1)
+
+        local highlight = row:CreateTexture(nil, "HIGHLIGHT")
+        highlight:SetAllPoints()
+        highlight:SetColorTexture(1, 1, 1, 0.15)
+
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        row.text:SetPoint("LEFT", 6, 0)
+        row.text:SetPoint("RIGHT", -6, 0)
+        row.text:SetJustifyH("LEFT")
+
+        row:SetScript("OnClick", function(self)
+            GetConfig()[picker.key] = self.opt.path
+            picker.onSelect()
+            picker:Hide()
+        end)
+        picker.rows[i] = row
+    end
+
+    picker.upBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    picker.upBtn:SetSize(24, 22)
+    picker.upBtn:SetPoint("TOPRIGHT", -6, -8)
+    picker.upBtn:SetText("^")
+    picker.upBtn:SetScript("OnClick", function() ScrollPicker(-PICKER_ROWS) end)
+
+    picker.downBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
+    picker.downBtn:SetSize(24, 22)
+    picker.downBtn:SetPoint("TOPRIGHT", picker.upBtn, "BOTTOMRIGHT", 0, -4)
+    picker.downBtn:SetText("v")
+    picker.downBtn:SetScript("OnClick", function() ScrollPicker(PICKER_ROWS) end)
+
+    picker.countText = picker:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    picker.countText:SetPoint("BOTTOMLEFT", 10, 8)
+
+    return picker
+end
+
+-- Opens the picker under anchor for config[key], or closes it if it's
+-- already open for that key.
+local function TogglePicker(anchor, kind, key, list, onSelect)
+    local p = GetPicker()
+    if p:IsShown() and p.key == key then
+        p:Hide()
+        return
+    end
+    p.kind, p.key, p.list, p.onSelect = kind, key, list, onSelect
+
+    -- Start scrolled so the current selection is in view.
+    p.offset = 0
+    local current = NormalizePath(GetConfig()[key] or "")
+    for i, opt in ipairs(list) do
+        if NormalizePath(opt.path) == current then
+            p.offset = i - floor(PICKER_ROWS / 2)
+            break
+        end
+    end
+
+    p:ClearAllPoints()
+    p:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+    RefreshPicker()
+    p:Show()
+end
+
+local function CreateRowLabel(parent, label, y)
+    local title = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("TOPLEFT", 24, y)
+    title:SetText(label)
+    return title
+end
+
+-- Labelled button showing the current choice; clicking opens the picker.
+local function CreateSelectRow(parent, label, y, onClick)
+    local title = CreateRowLabel(parent, label, y)
+    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    button:SetHeight(22)
+    button:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    button:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
+    button:SetScript("OnClick", onClick)
+    return button
+end
+
+-- Labelled [-] value [+] row; onStep(-1 or 1) changes the setting.
+local function CreateStepperRow(parent, label, y, onStep)
+    local title = CreateRowLabel(parent, label, y)
+
+    local minus = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    minus:SetSize(28, 22)
+    minus:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
+    minus:SetText("-")
+    minus:SetScript("OnClick", function() onStep(-1) end)
+
+    local plus = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    plus:SetSize(28, 22)
+    plus:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -24, y - 16)
+    plus:SetText("+")
+    plus:SetScript("OnClick", function() onStep(1) end)
+
+    local value = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    value:SetPoint("LEFT", minus, "RIGHT", 4, 0)
+    value:SetPoint("RIGHT", plus, "LEFT", -4, 0)
+    return value
+end
+
+function RefreshOptionsFrame()
+    if not optionsFrame then return end
+    local cfg = GetConfig()
+    optionsFrame.fontButton:SetText(MediaName(FontOptions(), cfg.fontPath))
+    optionsFrame.sizeValue:SetText(cfg.fontSize)
+    optionsFrame.textureButton:SetText(MediaName(TextureOptions(), cfg.barTexture))
+    optionsFrame.lsmNote:SetText(GetLSM() and "" or "LibSharedMedia not loaded: built-in media only")
+end
+
+local function GetOptionsFrame()
+    if optionsFrame then return optionsFrame end
+
+    optionsFrame = CreateFrame("Frame", "KrrlXPBarOptionsFrame", UIParent, "BackdropTemplate")
+    optionsFrame:SetSize(280, 220)
+    optionsFrame:SetPoint("CENTER")
+    optionsFrame:SetFrameStrata("DIALOG")
+    optionsFrame:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true, tileSize = 32, edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    })
+    optionsFrame:SetMovable(true)
+    optionsFrame:SetClampedToScreen(true)
+    optionsFrame:EnableMouse(true)
+    optionsFrame:RegisterForDrag("LeftButton")
+    optionsFrame:SetScript("OnDragStart", optionsFrame.StartMoving)
+    optionsFrame:SetScript("OnDragStop", optionsFrame.StopMovingOrSizing)
+    optionsFrame:Hide()
+
+    -- Lets Escape close the panel.
+    tinsert(UISpecialFrames, "KrrlXPBarOptionsFrame")
+
+    local title = optionsFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    title:SetPoint("TOP", 0, -18)
+    title:SetText("Krrl XP Bar Options")
+
+    local closeBtn = CreateFrame("Button", nil, optionsFrame, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", -6, -6)
+
+    optionsFrame.fontButton = CreateSelectRow(optionsFrame, "Font Typeface", -48, function(self)
+        TogglePicker(self, "font", "fontPath", FontOptions(), function()
+            ApplyFont()
+            RefreshOptionsFrame()
+        end)
+    end)
+
+    optionsFrame.sizeValue = CreateStepperRow(optionsFrame, "Font Size", -98, function(dir)
+        local cfg = GetConfig()
+        cfg.fontSize = min(FONT_SIZE_MAX, max(FONT_SIZE_MIN, (cfg.fontSize or CONFIG_DEFAULTS.fontSize) + dir))
+        ApplyFont()
+        RefreshOptionsFrame()
+    end)
+
+    optionsFrame.textureButton = CreateSelectRow(optionsFrame, "Bar Texture", -148, function(self)
+        TogglePicker(self, "texture", "barTexture", TextureOptions(), function()
+            ApplyBarTexture()
+            RefreshOptionsFrame()
+        end)
+    end)
+
+    optionsFrame.lsmNote = optionsFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    optionsFrame.lsmNote:SetPoint("BOTTOM", 0, 18)
+
+    return optionsFrame
+end
+
+local function ToggleOptionsPanel()
+    local panel = GetOptionsFrame()
+    if panel:IsShown() then
+        panel:Hide()
+    else
+        RefreshOptionsFrame()
+        panel:Show()
+    end
+end
+
+-- Right-click opens the options panel; left-click-drag still moves the bar.
+frame:SetScript("OnMouseUp", function(self, button)
+    if button == "RightButton" then
+        ToggleOptionsPanel()
+    end
+end)
 
 local lastTexts -- cache of the last BuildCustomTexts() result, for the tooltip
 
@@ -557,6 +942,8 @@ local function OnEventInner(self, event, arg1, arg2, arg3, arg4)
             frame:ClearAllPoints()
             frame:SetPoint(KrrlXPBarDB.point[1], UIParent, KrrlXPBarDB.point[2], KrrlXPBarDB.point[3], KrrlXPBarDB.point[4])
         end
+        ApplyFont()
+        ApplyBarTexture()
         ScanXPRateBuff()
         ScanHeirloomBonus()
         UpdateQuestXP()
@@ -665,14 +1052,17 @@ SLASH_KRRLXPBAR1 = "/kxp"
 SlashCmdList["KRRLXPBAR"] = function(msg)
     msg = (msg or ""):lower():trim()
 
-    if CONFIG_DEFAULTS[msg] ~= nil then
+    if msg == "options" or msg == "config" then
+        ToggleOptionsPanel()
+    elseif CONFIG_DEFAULTS[msg] ~= nil then
         local cfg = GetConfig()
         cfg[msg] = not cfg[msg]
         UpdateDisplay()
         print(("|cff33ff99Krrl XP Bar|r: %s is now %s."):format(msg, tostring(cfg[msg])))
     else
         print("|cff33ff99Krrl XP Bar|r commands:")
-        print("  Click and drag the bar to move it.")
+        print("  Click and drag the bar to move it. Right-click for options.")
+        print("  /kxp options   - open the font/texture options panel")
         print("  /kxp <option>  - toggle: leveltime-text, sessiontime-text,")
         print("                   showxphour-text, questrested-text,")
         print("                   showincompletequest-bar, showmaxlevel,")
