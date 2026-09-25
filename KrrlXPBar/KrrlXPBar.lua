@@ -487,22 +487,28 @@ local function UpdateDisplay()
 
     -- Starts where the current-XP fill ends, so it shows how far turning in
     -- ready-to-turn-in quests would push you (currentXP + completeXP), not
-    -- completeXP measured from zero.
-    completeTex:ClearAllPoints()
-    completeTex:SetPoint("TOPLEFT", frame, "TOPLEFT", widthFor(s.currentXP), 0)
-    completeTex:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", widthFor(s.currentXP), 0)
-    completeTex:SetWidth(math.max(widthFor(s.completeXP), 0.01))
+    -- completeXP measured from zero. Each segment's end is clamped to the
+    -- bar, so XP past the level cap doesn't spill off the right edge.
+    local incompleteXP = cfg["showincompletequest-bar"] and s.incompleteXP or 0
+    local curEnd = widthFor(s.currentXP)
+    local completeEnd = widthFor(s.currentXP + s.completeXP)
+    local incompleteEnd = widthFor(s.currentXP + s.completeXP + incompleteXP)
+    local restedEnd = widthFor(s.currentXP + s.completeXP + incompleteXP + s.restedXP)
 
-    local incompleteWidth = cfg["showincompletequest-bar"] and s.incompleteXP or 0
+    completeTex:ClearAllPoints()
+    completeTex:SetPoint("TOPLEFT", frame, "TOPLEFT", curEnd, 0)
+    completeTex:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", curEnd, 0)
+    completeTex:SetWidth(math.max(completeEnd - curEnd, 0.01))
+
     incompleteTex:ClearAllPoints()
     incompleteTex:SetPoint("TOPLEFT", completeTex, "TOPRIGHT")
     incompleteTex:SetPoint("BOTTOMLEFT", completeTex, "BOTTOMRIGHT")
-    incompleteTex:SetWidth(math.max(widthFor(incompleteWidth), 0.01))
+    incompleteTex:SetWidth(math.max(incompleteEnd - completeEnd, 0.01))
 
     restedTex:ClearAllPoints()
     restedTex:SetPoint("TOPLEFT", incompleteTex, "TOPRIGHT")
     restedTex:SetPoint("BOTTOMLEFT", incompleteTex, "BOTTOMRIGHT")
-    restedTex:SetWidth(math.max(widthFor(s.restedXP), 0.01))
+    restedTex:SetWidth(math.max(restedEnd - incompleteEnd, 0.01))
 
     mainText:SetText(string.format("%s   %s   %s", lastTexts.c1, lastTexts.c2, lastTexts.c3))
     xpHourText:SetText(lastTexts.c4 or "")
