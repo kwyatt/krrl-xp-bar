@@ -5,3 +5,4 @@ Tracks
  - quest log completed quests
  - rested xp
 
+![Example Screenshot of XP Bar](https://github.com/kwyatt/krrl-xp-bar/blob/main/media/example.png)
