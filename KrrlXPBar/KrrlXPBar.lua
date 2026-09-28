@@ -16,9 +16,9 @@
       - The pause/reset-session feature from the original aura has been
         removed by request; session time/XP-per-hour just tracks
         continuously from login (or reload, if configured).
-      - Most toggles are slash-command only. Font typeface/size and bar
-        texture have a small in-game options panel (right-click the bar,
-        or /kxp options).
+      - Most toggles are slash-command only. Appearance (font, font size,
+        bar texture, bar size) has an in-game options panel (right-click
+        the bar with Ctrl held, or /kxp options).
 ]]
 
 local ADDON_NAME = ...
@@ -40,6 +40,9 @@ local CONFIG_DEFAULTS = {
     ["fontPath"]              = "Fonts\\FRIZQT__.TTF",
     ["fontSize"]              = 12,
     ["barTexture"]            = "Interface\\TargetingFrame\\UI-StatusBar",
+    ["barWidth"]              = 600,
+    ["barHeight"]             = 30,
+    ["lock"]                  = false,
 }
 
 -- Typefaces and bar textures bundled with the WoW client, so these work on
@@ -59,7 +62,9 @@ local TEXTURE_OPTIONS = {
     { name = "Skills",   path = "Interface\\PaperDollInfoFrame\\UI-Character-Skills-Bar" },
 }
 
-local FONT_SIZE_MIN, FONT_SIZE_MAX = 8, 24
+local FONT_SIZE_MIN, FONT_SIZE_MAX = 6, 32
+local BAR_WIDTH_MIN = 100               -- max is the screen width
+local BAR_HEIGHT_MIN, BAR_HEIGHT_MAX = 6, 80
 
 -- Anything slower than this prints a warning when debug-profile is on.
 local DEBUG_PROFILE_THRESHOLD_MS = 2
@@ -410,10 +415,8 @@ end
 -- UI
 --------------------------------------------------------------------------
 
-local BAR_WIDTH, BAR_HEIGHT = 600, 30
-
 local frame = CreateFrame("StatusBar", "KrrlXPBarFrame", UIParent, "BackdropTemplate")
-frame:SetSize(BAR_WIDTH, BAR_HEIGHT)
+frame:SetSize(CONFIG_DEFAULTS.barWidth, CONFIG_DEFAULTS.barHeight)
 frame:SetPoint("TOP", UIParent, "TOP", 0, -4)
 frame:SetStatusBarTexture(CONFIG_DEFAULTS.barTexture)
 frame:SetStatusBarColor(0.34, 0.39, 1, 1)
@@ -432,7 +435,9 @@ frame:SetMovable(true)
 frame:SetClampedToScreen(true)
 frame:EnableMouse(true)
 frame:RegisterForDrag("LeftButton")
-frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+frame:SetScript("OnDragStart", function(self)
+    if not GetConfig().lock then self:StartMoving() end
+end)
 frame:SetScript("OnDragStop", function(self)
     self:StopMovingOrSizing()
     local point, _, relPoint, x, y = self:GetPoint()
@@ -462,7 +467,7 @@ local xpHourText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 xpHourText:SetPoint("TOP", frame, "BOTTOM", 0, -2)
 
 --------------------------------------------------------------------------
--- Appearance (font typeface / size, bar texture)
+-- Appearance (font typeface / size, bar texture, bar size)
 --------------------------------------------------------------------------
 
 -- LibSharedMedia is optional and never bundled: when another addon has
@@ -548,34 +553,73 @@ local function ApplyBarTexture()
     end
 end
 
+local function Clamp(v, lo, hi)
+    return min(hi, max(lo, v))
+end
+
+-- The widest bar that still fits on screen, in UI units.
+local function GetBarWidthMax()
+    return floor(UIParent:GetWidth())
+end
+
+local function ApplyBarSize()
+    local cfg = GetConfig()
+    cfg.barWidth = Clamp(cfg.barWidth or CONFIG_DEFAULTS.barWidth, BAR_WIDTH_MIN, GetBarWidthMax())
+    cfg.barHeight = Clamp(cfg.barHeight or CONFIG_DEFAULTS.barHeight, BAR_HEIGHT_MIN, BAR_HEIGHT_MAX)
+    frame:SetSize(cfg.barWidth, cfg.barHeight)
+end
+
+local function SaveBarPoint()
+    local point, _, relPoint, x, y = frame:GetPoint()
+    KrrlXPBarDB.point = { point, relPoint, x, y }
+end
+
 --------------------------------------------------------------------------
 -- Options panel
 --
--- Built from plain frames and UIPanelButtonTemplate buttons instead of
--- UIDropDownMenu/OptionsSliderTemplate/scroll-frame templates, which newer
--- clients have deprecated and the WoW Forever beta client may not ship.
+-- Every control is built from plain frames (Button, Slider, EditBox with
+-- InputBoxTemplate) instead of UIDropDownMenu/OptionsSliderTemplate/scroll
+-- templates, which newer clients have deprecated and the WoW Forever beta
+-- client may not ship.
 --------------------------------------------------------------------------
 
-local optionsFrame
+local optionsFrame   -- floating panel shell
+local optionsContent -- the controls; hosted by optionsFrame or the Settings page
 local RefreshOptionsFrame
 
--- Media picker: a fixed set of rows over a scroll offset (mouse wheel or
--- the arrow buttons). Font rows are drawn in their own typeface; texture
--- rows show a swatch of the texture in the bar color.
-local PICKER_ROWS, PICKER_ROW_HEIGHT = 12, 20
-local picker
+local BOX_BACKDROP = {
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Buttons\\WHITE8x8",
+    edgeSize = 1,
+}
 
-local function RefreshPicker()
-    local list = picker.list
-    local maxOffset = max(0, #list - PICKER_ROWS)
-    picker.offset = min(max(picker.offset, 0), maxOffset)
-    local current = NormalizePath(GetConfig()[picker.key] or "")
+-- Dropdown list: one shared frame, re-pointed at whichever dropdown opened
+-- it. Type in the search box to filter; scroll with the wheel or scrollbar.
+local LIST_ROWS, LIST_ROW_HEIGHT = 10, 20
+local dropdownList
 
-    for i, row in ipairs(picker.rows) do
-        local opt = list[picker.offset + i]
+local function RefreshDropdownList()
+    local list = dropdownList
+    local spec = list.owner.spec
+
+    local filter = list.search:GetText():lower()
+    local items = {}
+    for _, opt in ipairs(list.all) do
+        if filter == "" or opt.name:lower():find(filter, 1, true) then
+            items[#items + 1] = opt
+        end
+    end
+    list.items = items
+
+    local maxOffset = max(0, #items - LIST_ROWS)
+    list.offset = Clamp(list.offset, 0, maxOffset)
+    local current = NormalizePath(GetConfig()[spec.key] or "")
+
+    for i, row in ipairs(list.rows) do
+        local opt = items[list.offset + i]
         if opt then
             row.opt = opt
-            if picker.kind == "font" then
+            if spec.kind == "font" then
                 SetFontSafe(row.text, opt.path, 13)
                 row.preview:Hide()
             else
@@ -595,43 +639,83 @@ local function RefreshPicker()
         end
     end
 
-    picker.upBtn:SetEnabled(picker.offset > 0)
-    picker.downBtn:SetEnabled(picker.offset < maxOffset)
-    picker.countText:SetText(#list > PICKER_ROWS
-        and ("%d-%d of %d"):format(picker.offset + 1, picker.offset + PICKER_ROWS, #list)
-        or "")
+    list.updating = true
+    list.scrollBar:SetMinMaxValues(0, maxOffset)
+    list.scrollBar:SetValue(list.offset)
+    list.updating = false
+    list.scrollBar:SetShown(maxOffset > 0)
+    list.empty:SetShown(#items == 0)
 end
 
-local function ScrollPicker(delta)
-    picker.offset = picker.offset + delta
-    RefreshPicker()
+local function SelectDropdownItem(opt)
+    local owner = dropdownList.owner
+    GetConfig()[owner.spec.key] = opt.path
+    owner.spec.onChange()
+    owner:Refresh()
+    dropdownList:Hide()
 end
 
-local function GetPicker()
-    if picker then return picker end
+local function GetDropdownList()
+    if dropdownList then return dropdownList end
 
-    -- Parented to the options panel so it hides (and closes on Escape) with it.
-    picker = CreateFrame("Frame", nil, optionsFrame, "BackdropTemplate")
-    picker:SetSize(250, PICKER_ROWS * PICKER_ROW_HEIGHT + 34)
-    picker:SetFrameStrata("FULLSCREEN_DIALOG")
-    picker:SetBackdrop({
-        bgFile = "Interface\\Buttons\\WHITE8x8",
-        edgeFile = "Interface\\Buttons\\WHITE8x8",
-        edgeSize = 1,
-    })
-    picker:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
-    picker:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-    picker:EnableMouse(true)
-    picker:EnableMouseWheel(true)
-    picker:SetScript("OnMouseWheel", function(_, delta) ScrollPicker(-delta * 3) end)
-    picker:Hide()
-    picker.offset = 0
+    -- Parented to the options content so it hides along with whichever
+    -- window is hosting the controls.
+    local list = CreateFrame("Frame", nil, optionsContent, "BackdropTemplate")
+    dropdownList = list
+    list:SetHeight(LIST_ROWS * LIST_ROW_HEIGHT + 44)
+    list:SetFrameStrata("FULLSCREEN_DIALOG")
+    list:SetBackdrop(BOX_BACKDROP)
+    list:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+    list:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+    list:EnableMouse(true)
+    list:EnableMouseWheel(true)
+    list:SetScript("OnMouseWheel", function(self, delta)
+        self.offset = self.offset - delta * 3
+        RefreshDropdownList()
+    end)
+    list:Hide()
+    list.offset = 0
 
-    picker.rows = {}
-    for i = 1, PICKER_ROWS do
-        local row = CreateFrame("Button", nil, picker)
-        row:SetSize(206, PICKER_ROW_HEIGHT)
-        row:SetPoint("TOPLEFT", 8, -8 - (i - 1) * PICKER_ROW_HEIGHT)
+    -- Close on any click outside the list or its dropdown button.
+    -- GLOBAL_MOUSE_DOWN doesn't exist on older clients, hence the pcalls.
+    list:SetScript("OnShow", function(self) pcall(self.RegisterEvent, self, "GLOBAL_MOUSE_DOWN") end)
+    list:SetScript("OnHide", function(self)
+        pcall(self.UnregisterEvent, self, "GLOBAL_MOUSE_DOWN")
+        self.search:ClearFocus()
+    end)
+    list:SetScript("OnEvent", function(self)
+        if not self:IsMouseOver() and not (self.owner and self.owner:IsMouseOver()) then
+            self:Hide()
+        end
+    end)
+
+    list.search = CreateFrame("EditBox", nil, list, "InputBoxTemplate")
+    list.search:SetHeight(20)
+    list.search:SetPoint("TOPLEFT", 12, -8)
+    list.search:SetPoint("TOPRIGHT", -8, -8)
+    list.search:SetAutoFocus(false)
+    list.search:SetScript("OnTextChanged", function(self, userInput)
+        if userInput then
+            list.offset = 0
+            RefreshDropdownList()
+        end
+    end)
+    list.search:SetScript("OnEnterPressed", function()
+        if list.items and list.items[1] then SelectDropdownItem(list.items[1]) end
+    end)
+    list.search:SetScript("OnEscapePressed", function() list:Hide() end)
+
+    local searchHint = list.search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchHint:SetPoint("LEFT", 2, 0)
+    searchHint:SetText("Type to filter...")
+    list.search:HookScript("OnTextChanged", function(self) searchHint:SetShown(self:GetText() == "") end)
+
+    list.rows = {}
+    for i = 1, LIST_ROWS do
+        local row = CreateFrame("Button", nil, list)
+        row:SetHeight(LIST_ROW_HEIGHT)
+        row:SetPoint("TOPLEFT", 6, -36 - (i - 1) * LIST_ROW_HEIGHT)
+        row:SetPoint("RIGHT", list, "RIGHT", -22, 0)
 
         row.preview = row:CreateTexture(nil, "BACKGROUND")
         row.preview:SetPoint("TOPLEFT", 0, -2)
@@ -647,112 +731,344 @@ local function GetPicker()
         row.text:SetPoint("RIGHT", -6, 0)
         row.text:SetJustifyH("LEFT")
 
-        row:SetScript("OnClick", function(self)
-            GetConfig()[picker.key] = self.opt.path
-            picker.onSelect()
-            picker:Hide()
-        end)
-        picker.rows[i] = row
+        row:SetScript("OnClick", function(self) SelectDropdownItem(self.opt) end)
+        list.rows[i] = row
     end
 
-    picker.upBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
-    picker.upBtn:SetSize(24, 22)
-    picker.upBtn:SetPoint("TOPRIGHT", -6, -8)
-    picker.upBtn:SetText("^")
-    picker.upBtn:SetScript("OnClick", function() ScrollPicker(-PICKER_ROWS) end)
+    local scrollBar = CreateFrame("Slider", nil, list, "BackdropTemplate")
+    scrollBar:SetOrientation("VERTICAL")
+    scrollBar:SetWidth(10)
+    scrollBar:SetPoint("TOPRIGHT", -6, -36)
+    scrollBar:SetPoint("BOTTOMRIGHT", -6, 8)
+    scrollBar:SetBackdrop(BOX_BACKDROP)
+    scrollBar:SetBackdropColor(0, 0, 0, 0.6)
+    scrollBar:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
+    scrollBar:SetThumbTexture("Interface\\Buttons\\WHITE8x8")
+    scrollBar:GetThumbTexture():SetSize(8, 28)
+    scrollBar:GetThumbTexture():SetVertexColor(0.6, 0.6, 0.6, 1)
+    scrollBar:SetValueStep(1)
+    scrollBar:SetScript("OnValueChanged", function(_, value)
+        if list.updating then return end
+        list.offset = floor(value + 0.5)
+        RefreshDropdownList()
+    end)
+    list.scrollBar = scrollBar
 
-    picker.downBtn = CreateFrame("Button", nil, picker, "UIPanelButtonTemplate")
-    picker.downBtn:SetSize(24, 22)
-    picker.downBtn:SetPoint("TOPRIGHT", picker.upBtn, "BOTTOMRIGHT", 0, -4)
-    picker.downBtn:SetText("v")
-    picker.downBtn:SetScript("OnClick", function() ScrollPicker(PICKER_ROWS) end)
+    list.empty = list:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    list.empty:SetPoint("TOP", 0, -44)
+    list.empty:SetText("No matches")
 
-    picker.countText = picker:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    picker.countText:SetPoint("BOTTOMLEFT", 10, 8)
-
-    return picker
+    return list
 end
 
--- Opens the picker under anchor for config[key], or closes it if it's
--- already open for that key.
-local function TogglePicker(anchor, kind, key, list, onSelect)
-    local p = GetPicker()
-    if p:IsShown() and p.key == key then
-        p:Hide()
+local function ToggleDropdownList(owner)
+    local list = GetDropdownList()
+    if list:IsShown() and list.owner == owner then
+        list:Hide()
         return
     end
-    p.kind, p.key, p.list, p.onSelect = kind, key, list, onSelect
+
+    list.owner = owner
+    list.all = owner.spec.options()
+    list.search:SetText("")
 
     -- Start scrolled so the current selection is in view.
-    p.offset = 0
-    local current = NormalizePath(GetConfig()[key] or "")
-    for i, opt in ipairs(list) do
+    list.offset = 0
+    local current = NormalizePath(GetConfig()[owner.spec.key] or "")
+    for i, opt in ipairs(list.all) do
         if NormalizePath(opt.path) == current then
-            p.offset = i - floor(PICKER_ROWS / 2)
+            list.offset = i - floor(LIST_ROWS / 2)
             break
         end
     end
 
-    p:ClearAllPoints()
-    p:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
-    RefreshPicker()
-    p:Show()
+    -- Re-assert the strata each time: reparenting the options content
+    -- between hosts can reset it to the new host's.
+    list:SetFrameStrata("FULLSCREEN_DIALOG")
+    list:ClearAllPoints()
+    list:SetPoint("TOPLEFT", owner, "BOTTOMLEFT", 0, -2)
+    list:SetPoint("TOPRIGHT", owner, "BOTTOMRIGHT", 0, -2)
+    list:Show()
+    RefreshDropdownList()
+    list.search:SetFocus()
 end
 
-local function CreateRowLabel(parent, label, y)
-    local title = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", 24, y)
-    title:SetText(label)
-    return title
+-- spec: kind ("font" draws the current choice in its own typeface),
+-- key (config key holding a file path), options (returns the list),
+-- onChange (applies the new value).
+local function CreateDropdown(parent, width, spec)
+    local dropdown = CreateFrame("Button", nil, parent, "BackdropTemplate")
+    dropdown:SetSize(width, 24)
+    dropdown:SetBackdrop(BOX_BACKDROP)
+    dropdown:SetBackdropColor(0, 0, 0, 0.6)
+    dropdown:SetBackdropBorderColor(0.5, 0.5, 0.5, 1)
+    dropdown.spec = spec
+
+    dropdown.text = dropdown:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    dropdown.text:SetPoint("LEFT", 8, 0)
+    dropdown.text:SetPoint("RIGHT", -26, 0)
+    dropdown.text:SetJustifyH("LEFT")
+
+    local arrow = dropdown:CreateTexture(nil, "OVERLAY")
+    arrow:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-ScrollDown-Up")
+    arrow:SetSize(22, 22)
+    arrow:SetPoint("RIGHT", -2, 0)
+
+    local highlight = dropdown:CreateTexture(nil, "HIGHLIGHT")
+    highlight:SetAllPoints()
+    highlight:SetColorTexture(1, 1, 1, 0.08)
+
+    dropdown:SetScript("OnClick", ToggleDropdownList)
+
+    function dropdown:Refresh()
+        local path = GetConfig()[spec.key]
+        if spec.kind == "font" then
+            SetFontSafe(self.text, path, 13)
+        end
+        self.text:SetText(MediaName(spec.options(), path))
+    end
+
+    return dropdown
 end
 
--- Labelled button showing the current choice; clicking opens the picker.
-local function CreateSelectRow(parent, label, y, onClick)
-    local title = CreateRowLabel(parent, label, y)
-    local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    button:SetHeight(22)
-    button:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-    button:SetPoint("RIGHT", parent, "RIGHT", -24, 0)
-    button:SetScript("OnClick", onClick)
-    return button
+-- Slider plus a box you can type a number into, kept in sync. The mouse
+-- wheel over the slider nudges the value by 1.
+-- spec: key (numeric config key), min, max (number or function),
+-- onChange (applies the new value).
+local function CreateSliderRow(parent, width, spec)
+    local row = CreateFrame("Frame", nil, parent)
+    row:SetSize(width, 24)
+
+    local box = CreateFrame("EditBox", nil, row, "InputBoxTemplate")
+    box:SetSize(46, 20)
+    box:SetPoint("RIGHT", -2, 0)
+    box:SetAutoFocus(false)
+    box:SetNumeric(true)
+    box:SetMaxLetters(4)
+    box:SetJustifyH("CENTER")
+
+    local slider = CreateFrame("Slider", nil, row, "BackdropTemplate")
+    slider:SetOrientation("HORIZONTAL")
+    slider:SetHeight(17)
+    slider:SetPoint("LEFT", 0, 0)
+    slider:SetPoint("RIGHT", box, "LEFT", -14, 0)
+    slider:SetBackdrop({
+        bgFile = "Interface\\Buttons\\UI-SliderBar-Background",
+        edgeFile = "Interface\\Buttons\\UI-SliderBar-Border",
+        tile = true, tileSize = 8, edgeSize = 8,
+        insets = { left = 3, right = 3, top = 6, bottom = 6 },
+    })
+    slider:SetThumbTexture("Interface\\Buttons\\UI-SliderBar-Button-Horizontal")
+    slider:SetValueStep(1)
+    if slider.SetObeyStepOnDrag then slider:SetObeyStepOnDrag(true) end
+    slider:EnableMouseWheel(true)
+
+    local function Bounds()
+        local hi = type(spec.max) == "function" and spec.max() or spec.max
+        return spec.min, hi
+    end
+
+    local function Set(value)
+        local lo, hi = Bounds()
+        GetConfig()[spec.key] = Clamp(floor(value + 0.5), lo, hi)
+        spec.onChange()
+    end
+
+    function row:Refresh()
+        local lo, hi = Bounds()
+        local value = GetConfig()[spec.key]
+        self.updating = true
+        slider:SetMinMaxValues(lo, hi)
+        slider:SetValue(value)
+        self.updating = false
+        if not box:HasFocus() then box:SetText(value) end
+    end
+
+    slider:SetScript("OnValueChanged", function(_, value)
+        if row.updating then return end
+        Set(value)
+        row:Refresh()
+    end)
+    slider:SetScript("OnMouseWheel", function(_, delta)
+        Set(GetConfig()[spec.key] + delta)
+        row:Refresh()
+    end)
+
+    -- Typed values apply on Enter or when the box loses focus; Escape
+    -- reverts to the current value.
+    box:SetScript("OnEnterPressed", box.ClearFocus)
+    box:SetScript("OnEscapePressed", function(self)
+        self.cancelled = true
+        self:ClearFocus()
+    end)
+    box:SetScript("OnEditFocusLost", function(self)
+        local n = tonumber(self:GetText())
+        if n and not self.cancelled then Set(n) end
+        self.cancelled = nil
+        self:HighlightText(0, 0)
+        self:SetText(GetConfig()[spec.key])
+        row:Refresh()
+    end)
+
+    return row
 end
 
--- Labelled [-] value [+] row; onStep(-1 or 1) changes the setting.
-local function CreateStepperRow(parent, label, y, onStep)
-    local title = CreateRowLabel(parent, label, y)
+-- Resize grip in the bar's bottom-right corner, shown while the options
+-- panel is open.
+local resizeGrip = CreateFrame("Button", nil, frame)
+resizeGrip:SetSize(16, 16)
+resizeGrip:SetPoint("BOTTOMRIGHT", -1, 1)
+resizeGrip:SetFrameLevel(frame:GetFrameLevel() + 5)
+resizeGrip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+resizeGrip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+resizeGrip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizeGrip:Hide()
 
-    local minus = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    minus:SetSize(28, 22)
-    minus:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -4)
-    minus:SetText("-")
-    minus:SetScript("OnClick", function() onStep(-1) end)
+-- The grip is only offered while the options are on screen and the bar
+-- isn't locked.
+local function UpdateResizeGrip()
+    resizeGrip:SetShown(optionsContent and optionsContent:IsVisible() and not GetConfig().lock)
+end
+frame:SetResizable(true)
 
-    local plus = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    plus:SetSize(28, 22)
-    plus:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -24, y - 16)
-    plus:SetText("+")
-    plus:SetScript("OnClick", function() onStep(1) end)
+resizeGrip:SetScript("OnMouseDown", function()
+    local maxWidth = GetBarWidthMax()
+    if frame.SetResizeBounds then
+        frame:SetResizeBounds(BAR_WIDTH_MIN, BAR_HEIGHT_MIN, maxWidth, BAR_HEIGHT_MAX)
+    else
+        frame:SetMinResize(BAR_WIDTH_MIN, BAR_HEIGHT_MIN)
+        frame:SetMaxResize(maxWidth, BAR_HEIGHT_MAX)
+    end
+    frame:StartSizing("BOTTOMRIGHT")
+end)
+resizeGrip:SetScript("OnMouseUp", function()
+    frame:StopMovingOrSizing()
+    local cfg = GetConfig()
+    cfg.barWidth = floor(frame:GetWidth() + 0.5)
+    cfg.barHeight = floor(frame:GetHeight() + 0.5)
+    ApplyBarSize()
+    SaveBarPoint()
+    RefreshOptionsFrame()
+end)
 
-    local value = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    value:SetPoint("LEFT", minus, "RIGHT", 4, 0)
-    value:SetPoint("RIGHT", plus, "LEFT", -4, 0)
-    return value
+local APPEARANCE_KEYS = { "fontPath", "fontSize", "barTexture", "barWidth", "barHeight" }
+
+local function ResetAppearance()
+    local cfg = GetConfig()
+    for _, key in ipairs(APPEARANCE_KEYS) do
+        cfg[key] = CONFIG_DEFAULTS[key]
+    end
+    ApplyFont()
+    ApplyBarTexture()
+    ApplyBarSize()
+    RefreshOptionsFrame()
 end
 
 function RefreshOptionsFrame()
-    if not optionsFrame then return end
-    local cfg = GetConfig()
-    optionsFrame.fontButton:SetText(MediaName(FontOptions(), cfg.fontPath))
-    optionsFrame.sizeValue:SetText(cfg.fontSize)
-    optionsFrame.textureButton:SetText(MediaName(TextureOptions(), cfg.barTexture))
-    optionsFrame.lsmNote:SetText(GetLSM() and "" or "LibSharedMedia not loaded: built-in media only")
+    if not optionsContent then return end
+    for _, control in ipairs(optionsContent.controls) do
+        control:Refresh()
+    end
+    optionsContent.lockCheck:SetChecked(GetConfig().lock)
+    optionsContent.lsmNote:SetText(GetLSM() and "" or "LibSharedMedia not loaded: built-in media only")
+    UpdateResizeGrip()
 end
+
+local OPTIONS_WIDTH, OPTIONS_PAD = 320, 20
+
+-- All controls live in one content frame that moves between two hosts: the
+-- floating panel (Ctrl+Right-click, /kxp options) and the AddOns page of
+-- Blizzard's settings window (Escape -> Options -> AddOns).
+local function GetOptionsContent()
+    if optionsContent then return optionsContent end
+
+    optionsContent = CreateFrame("Frame", nil, UIParent)
+    optionsContent:SetWidth(OPTIONS_WIDTH)
+    optionsContent:Hide()
+    optionsContent:SetScript("OnShow", UpdateResizeGrip)
+    optionsContent:SetScript("OnHide", UpdateResizeGrip)
+
+    local controlWidth = OPTIONS_WIDTH - 2 * OPTIONS_PAD
+    local y = -4
+    optionsContent.controls = {}
+
+    local function AddRow(label, control)
+        local text = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        text:SetPoint("TOPLEFT", OPTIONS_PAD, y)
+        text:SetText(label)
+        control:SetPoint("TOPLEFT", text, "BOTTOMLEFT", 0, -6)
+        tinsert(optionsContent.controls, control)
+        y = y - 54
+    end
+
+    AddRow("Font", CreateDropdown(optionsContent, controlWidth, {
+        kind = "font", key = "fontPath", options = FontOptions, onChange = ApplyFont,
+    }))
+    AddRow("Font Size", CreateSliderRow(optionsContent, controlWidth, {
+        key = "fontSize", min = FONT_SIZE_MIN, max = FONT_SIZE_MAX, onChange = ApplyFont,
+    }))
+    AddRow("Bar Texture", CreateDropdown(optionsContent, controlWidth, {
+        kind = "texture", key = "barTexture", options = TextureOptions, onChange = ApplyBarTexture,
+    }))
+    AddRow("Bar Width", CreateSliderRow(optionsContent, controlWidth, {
+        key = "barWidth", min = BAR_WIDTH_MIN, max = GetBarWidthMax, onChange = ApplyBarSize,
+    }))
+    AddRow("Bar Height", CreateSliderRow(optionsContent, controlWidth, {
+        key = "barHeight", min = BAR_HEIGHT_MIN, max = BAR_HEIGHT_MAX, onChange = ApplyBarSize,
+    }))
+
+    local lockCheck = CreateFrame("CheckButton", nil, optionsContent, "UICheckButtonTemplate")
+    lockCheck:SetSize(24, 24)
+    lockCheck:SetPoint("TOPLEFT", OPTIONS_PAD - 4, y + 6)
+    lockCheck:SetScript("OnClick", function(self)
+        GetConfig().lock = self:GetChecked() and true or false
+        UpdateResizeGrip()
+    end)
+    optionsContent.lockCheck = lockCheck
+
+    local lockLabel = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lockLabel:SetPoint("LEFT", lockCheck, "RIGHT", 2, 0)
+    lockLabel:SetText("Lock bar (no moving or resizing)")
+    y = y - 26
+
+    local hint = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("TOPLEFT", OPTIONS_PAD, y + 4)
+    hint:SetPoint("RIGHT", -OPTIONS_PAD, 0)
+    hint:SetJustifyH("LEFT")
+    hint:SetText("While unlocked, you can also drag the grip in the bar's corner to resize it.")
+
+    optionsContent.lsmNote = optionsContent:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    optionsContent.lsmNote:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -6)
+    y = y - 48
+
+    local reset = CreateFrame("Button", nil, optionsContent, "UIPanelButtonTemplate")
+    reset:SetSize(140, 22)
+    reset:SetPoint("TOP", 0, y)
+    reset:SetText("Reset to Defaults")
+    reset:SetScript("OnClick", ResetAppearance)
+    y = y - 22
+
+    optionsContent:SetHeight(-y + 4)
+    return optionsContent
+end
+
+local function AttachOptionsContent(host, x, y)
+    local content = GetOptionsContent()
+    if dropdownList then dropdownList:Hide() end
+    content:SetParent(host)
+    content:ClearAllPoints()
+    content:SetPoint("TOPLEFT", host, "TOPLEFT", x, y)
+    content:Show()
+    RefreshOptionsFrame()
+end
+
+local OPTIONS_TITLE_HEIGHT = 46
 
 local function GetOptionsFrame()
     if optionsFrame then return optionsFrame end
 
     optionsFrame = CreateFrame("Frame", "KrrlXPBarOptionsFrame", UIParent, "BackdropTemplate")
-    optionsFrame:SetSize(280, 220)
+    optionsFrame:SetSize(OPTIONS_WIDTH, GetOptionsContent():GetHeight() + OPTIONS_TITLE_HEIGHT + 18)
     optionsFrame:SetPoint("CENTER")
     optionsFrame:SetFrameStrata("DIALOG")
     optionsFrame:SetBackdrop({
@@ -779,30 +1095,6 @@ local function GetOptionsFrame()
     local closeBtn = CreateFrame("Button", nil, optionsFrame, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", -6, -6)
 
-    optionsFrame.fontButton = CreateSelectRow(optionsFrame, "Font Typeface", -48, function(self)
-        TogglePicker(self, "font", "fontPath", FontOptions(), function()
-            ApplyFont()
-            RefreshOptionsFrame()
-        end)
-    end)
-
-    optionsFrame.sizeValue = CreateStepperRow(optionsFrame, "Font Size", -98, function(dir)
-        local cfg = GetConfig()
-        cfg.fontSize = min(FONT_SIZE_MAX, max(FONT_SIZE_MIN, (cfg.fontSize or CONFIG_DEFAULTS.fontSize) + dir))
-        ApplyFont()
-        RefreshOptionsFrame()
-    end)
-
-    optionsFrame.textureButton = CreateSelectRow(optionsFrame, "Bar Texture", -148, function(self)
-        TogglePicker(self, "texture", "barTexture", TextureOptions(), function()
-            ApplyBarTexture()
-            RefreshOptionsFrame()
-        end)
-    end)
-
-    optionsFrame.lsmNote = optionsFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    optionsFrame.lsmNote:SetPoint("BOTTOM", 0, 18)
-
     return optionsFrame
 end
 
@@ -811,14 +1103,45 @@ local function ToggleOptionsPanel()
     if panel:IsShown() then
         panel:Hide()
     else
-        RefreshOptionsFrame()
         panel:Show()
+        AttachOptionsContent(panel, 0, -OPTIONS_TITLE_HEIGHT)
     end
 end
 
--- Right-click opens the options panel; left-click-drag still moves the bar.
+-- Page in Escape -> Options -> AddOns. Uses the Settings API on current
+-- clients and InterfaceOptions_AddCategory on older ones; if neither exists
+-- the floating panel is still there.
+local function RegisterSettingsPage()
+    local page = CreateFrame("Frame")
+    page.name = "Krrl XP Bar" -- read by InterfaceOptions_AddCategory
+    page:Hide()
+
+    local title = page:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("Krrl XP Bar")
+
+    local subtitle = page:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -6)
+    subtitle:SetText("Ctrl+Right-click the bar or type /kxp options to open these settings in a floating window.")
+
+    page:SetScript("OnShow", function(self)
+        if optionsFrame then optionsFrame:Hide() end
+        AttachOptionsContent(self, -4, -58)
+    end)
+
+    if Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory then
+        Settings.RegisterAddOnCategory(Settings.RegisterCanvasLayoutCategory(page, page.name))
+    elseif InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(page)
+    end
+end
+
+pcall(RegisterSettingsPage)
+
+-- Ctrl+Right-click opens the options panel (plain right-click is too easy to
+-- hit by accident); left-click-drag moves the bar unless it's locked.
 frame:SetScript("OnMouseUp", function(self, button)
-    if button == "RightButton" then
+    if button == "RightButton" and IsControlKeyDown() then
         ToggleOptionsPanel()
     end
 end)
@@ -835,6 +1158,8 @@ local function ShowTooltip()
             GameTooltip:AddLine(line, 0.9, 0.9, 0.9, true)
         end
     end
+    GameTooltip:AddLine(GetConfig().lock and "Ctrl+Right-click for options (bar locked)"
+        or "Drag to move. Ctrl+Right-click for options.", 0.5, 0.5, 0.5, true)
     GameTooltip:Show()
 end
 
@@ -903,6 +1228,12 @@ local function UpdateDisplay()
     end
 end
 
+-- The quest/rested overlays are laid out from the bar's width, so re-run
+-- the layout whenever the bar is resized (options panel or corner grip).
+frame:SetScript("OnSizeChanged", function()
+    if KrrlXPBarDB then UpdateDisplay() end
+end)
+
 --------------------------------------------------------------------------
 -- Event handling (mirrors the aura's event trigger)
 --------------------------------------------------------------------------
@@ -944,6 +1275,7 @@ local function OnEventInner(self, event, arg1, arg2, arg3, arg4)
         end
         ApplyFont()
         ApplyBarTexture()
+        ApplyBarSize()
         ScanXPRateBuff()
         ScanHeirloomBonus()
         UpdateQuestXP()
@@ -1058,14 +1390,16 @@ SlashCmdList["KRRLXPBAR"] = function(msg)
         local cfg = GetConfig()
         cfg[msg] = not cfg[msg]
         UpdateDisplay()
+        RefreshOptionsFrame()
         print(("|cff33ff99Krrl XP Bar|r: %s is now %s."):format(msg, tostring(cfg[msg])))
     else
         print("|cff33ff99Krrl XP Bar|r commands:")
-        print("  Click and drag the bar to move it. Right-click for options.")
-        print("  /kxp options   - open the font/texture options panel")
+        print("  Drag the bar to move it. Ctrl+Right-click for options.")
+        print("  /kxp options   - open the appearance options panel")
         print("  /kxp <option>  - toggle: leveltime-text, sessiontime-text,")
         print("                   showxphour-text, questrested-text,")
         print("                   showincompletequest-bar, showmaxlevel,")
-        print("                   reset_reload, hide_xpbar, debug-profile")
+        print("                   reset_reload, hide_xpbar, debug-profile,")
+        print("                   lock (stop the bar moving/resizing)")
     end
 end
